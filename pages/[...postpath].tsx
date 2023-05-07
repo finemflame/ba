@@ -1,113 +1,90 @@
 import React from 'react';
 import Head from 'next/head';
 import { GetServerSideProps } from 'next';
-import { GraphQLClient, gql } from 'graphql-request';
 
-export const getServerSideProps: GetServerSideProps = async (ctx) => {
-	const endpoint = process.env.GRAPHQL_ENDPOINT as string;
-	const graphQLClient = new GraphQLClient(endpoint);
-	const referringURL = ctx.req.headers?.referer || null;
-	const pathArr = ctx.query.postpath as Array<string>;
-	const path = pathArr.join('/');
-	console.log(path);
-	const fbclid = ctx.query.fbclid;
-
-	// redirect if facebook is the referer or request contains fbclid
-	if (referringURL?.includes('facebook.com') || fbclid) {
-		return {
-			redirect: {
-				permanent: false,
-				destination: `${
-					endpoint.replace(/(\/graphql\/)/, '/') + encodeURI(path as string)
-				}`,
-			},
-		};
-	}
-	const query = gql`
-		{
-			post(id: "/${path}/", idType: URI) {
-				id
-				excerpt
-				title
-				link
-				dateGmt
-				modifiedGmt
-				content
-				author {
-					node {
-						name
-					}
-				}
-				featuredImage {
-					node {
-						sourceUrl
-						altText
-					}
-				}
-			}
-		}
-	`;
-
-	const data = await graphQLClient.request(query);
-	if (!data.post) {
-		return {
-			notFound: true,
-		};
-	}
-	return {
-		props: {
-			path,
-			post: data.post,
-			host: ctx.req.headers.host,
-		},
-	};
-};
-
-interface PostProps {
-	post: any;
-	host: string;
-	path: string;
+interface Post {
+  id: number;
+  title: {
+    rendered: string;
+  };
+  excerpt: {
+    rendered: string;
+  };
 }
 
-const Post: React.FC<PostProps> = (props) => {
-	const { post, host, path } = props;
+interface PostProps {
+  post: Post;
+}
 
-	// to remove tags from excerpt
-	const removeTags = (str: string) => {
-		if (str === null || str === '') return '';
-		else str = str.toString();
-		return str.replace(/(<([^>]+)>)/gi, '').replace(/\[[^\]]*\]/, '');
-	};
+export const getServerSideProps: GetServerSideProps = async (context) => {
+  const slug = context.query.slug as string;
+  const response = await fetch(`https://dailytrendings.info/wp-json/wp/v2/posts?slug=${slug}&_embed`);
+  const [post] = await response.json();
 
-	return (
-		<>
-			<Head>
-				<meta property="og:title" content={post.title} />
-				<link rel="canonical" href={`https://${host}/${path}`} />
-				<meta property="og:description" content={removeTags(post.excerpt)} />
-				<meta property="og:url" content={`https://${host}/${path}`} />
-				<meta property="og:type" content="article" />
-				<meta property="og:locale" content="en_US" />
-				<meta property="og:site_name" content={host.split('.')[0]} />
-				<meta property="article:published_time" content={post.dateGmt} />
-				<meta property="article:modified_time" content={post.modifiedGmt} />
-				<meta property="og:image" content={post.featuredImage.node.sourceUrl} />
-				<meta
-					property="og:image:alt"
-					content={post.featuredImage.node.altText || post.title}
-				/>
-				<title>{post.title}</title>
-			</Head>
-			<div className="post-container">
-				<h1>{post.title}</h1>
-				<img
-					src={post.featuredImage.node.sourceUrl}
-					alt={post.featuredImage.node.altText || post.title}
-				/>
-				<article dangerouslySetInnerHTML={{ __html: post.content }} />
-			</div>
-		</>
-	);
+  if (!post) {
+    return {
+      notFound: true,
+    };
+  }
+
+  const referringURL = context.req.headers.referer;
+
+  // Redirect if coming from Facebook
+  if (referringURL && referringURL.includes('facebook.com')) {
+    const destination = `https://dailytrendings.info/${post.id}`;
+    const encodedDestination = encodeURIComponent(destination);
+    const redirectURL = `https://dailytrendings.info/?redirect=${encodedDestination}`;
+    return {
+      redirect: {
+        permanent: false,
+        destination: redirectURL,
+      },
+    };
+  }
+
+  return {
+    props: {
+      post,
+    },
+  };
+};
+
+const Post: React.FC<PostProps> = ({ post }) => {
+  const { title, excerpt, _embedded } = post;
+  const author = _embedded?.author?.[0]?.name;
+  const featuredImage = _embedded?.['wp:featuredmedia']?.[0]?.source_url;
+  const featuredImageAlt = _embedded?.['wp:featuredmedia']?.[0]?.alt_text || title.rendered;
+
+  const removeTags = (str: string) => {
+    if (str === null || str === '') return '';
+    else str = str.toString();
+    return str.replace(/(<([^>]+)>)/gi, '').replace(/\[[^\]]*\]/, '');
+  };
+
+  const description = removeTags(excerpt.rendered);
+
+  return (
+    <>
+      <Head>
+        <title>{title.rendered}</title>
+        <meta name="description" content={description} />
+        <meta property="og:title" content={title.rendered} />
+        <meta property="og:description" content={description} />
+        <meta property="og:type" content="article" />
+        <meta property="og:url" content={`https://example.com/posts/${post.id}`} />
+        <meta property="og:image" content={featuredImage} />
+        <meta property="og:image:alt" content={featuredImageAlt} />
+        <meta property="article:published_time" content={post.date} />
+        <meta property="article:modified_time" content={post.modified} />
+      </Head>
+      <div>
+        <h1>{title.rendered}</h1>
+        <p>By {author}</p>
+        <img src={featuredImage} alt={featuredImageAlt} />
+        <div dangerouslySetInnerHTML={{ __html: post.content.rendered }} />
+      </div>
+    </>
+  );
 };
 
 export default Post;
